@@ -115,11 +115,11 @@
   (build [this u]))
 
 (declare empty-s)
-(declare choice)
 (declare lvar)
 (declare lvar?)
 (declare pair)
 (declare lcons)
+(declare bind-goal)
 
 (deftype Substitutions [s l verify cs]
   Object
@@ -204,10 +204,12 @@
 
   IBind
   (bind [this g]
-    (g this))
+    (bind-goal g this))
   IMPlus
   (mplus [this f]
-    (choice this f))
+    (cons this f))
+  clojure.lang.Seqable
+  (seq [this] (cons this nil))
   ITake
   (take* [this] this))
 
@@ -745,6 +747,7 @@
 ;; =============================================================================
 ;; Goals and Goal Constructors
 
+; TODO what's the purpose of bind* and mplus* being macros?
 (defmacro bind*
   ([a g] `(bind ~a ~g))
   ([a g & g-rest]
@@ -753,29 +756,29 @@
 (defmacro mplus*
   ([e] e)
   ([e & e-rest]
-    (reduce (fn [ex e] `(mplus ~e (fn [] ~ex))) 
-      nil (reverse (cons e e-rest)))))
-
-(defmacro -inc [& rest]
-  `(fn -inc [] ~@rest))
-
+    (reduce (fn [ex e] `(mplus ~e ~ex)) 
+       nil (reverse (cons e e-rest)))))
+   
 (extend-type Object
   ITake
-  (take* [this] this))
+  (take* [this] (cons this nil)))
 
-(deftype Choice [a f]
+(extend-type clojure.lang.ISeq
   IBind
   (bind [this g]
-    (mplus (g a) (-inc (bind f g))))
+    (when-let [this (seq this)]
+      (mplus (bind (first this) g) (bind (rest this) g))))
   IMPlus
   (mplus [this fp]
-    (Choice. a (fn [] (mplus (fp) f))))
+    (if-let [this (seq this)]
+      (cons (first this) (mplus fp (rest this)))
+      fp))
   ITake
   (take* [this]
-    (lazy-seq (cons a (take* f)))))
+    this))
 
-(defn ^Choice choice [a f]
-  (Choice. a f))
+(defn bind-goal [g a]
+  (lazy-seq (g a)))
 
 ;; -----------------------------------------------------------------------------
 ;; MZero
@@ -798,18 +801,18 @@
 (extend-type Object
   IMPlus
   (mplus [this f]
-    (Choice. this f)))
+    (cons this f)))
 
 ;; -----------------------------------------------------------------------------
 ;; Inc
 
-(extend-type clojure.lang.Fn
+(extend-type clojure.lang.LazySeq
   IBind
   (bind [this g]
-    (-inc (bind (this) g)))
+    (lazy-seq (bind (seq this) g)))
   IMPlus
   (mplus [this f]
-    (-inc (mplus (f) this)))
+    (concat f this))
   ITake
   (take* [this] (lazy-seq (take* (this)))))
 
@@ -849,8 +852,7 @@
   [& clauses]
   (let [a (gensym "a")]
     `(fn [~a]
-       (-inc
-        (mplus* ~@(bind-conde-clauses a clauses))))))
+       (mplus* ~@(bind-conde-clauses a clauses)))))
 
 (defn- lvar-bind [sym]
   ((juxt identity
@@ -864,16 +866,13 @@
   conjunction."
   [[& lvars] & goals]
   `(fn [a#]
-     (-inc
-      (let [~@(lvar-binds lvars)]
-        (bind* a# ~@goals)))))
+     (let [~@(lvar-binds lvars)]
+       (bind* a# ~@goals))))
 
 (defmacro solve [& [n [x] & goals]]
-  `(let [xs# (take* (fn []
-                      ((fresh [~x] ~@goals
-                         (fn [a#]
-                           (-reify a# ~x)))
-                       empty-s)))]
+  `(let [~@(lvar-bind x)
+         xs# (map #(-reify % ~x) 
+               ((fresh [] ~@goals) empty-s))]
      (if ~n
        (take ~n xs#)
        xs#)))
@@ -1059,6 +1058,7 @@
          ((fresh []
             ~@goals) ~a)))))
 
+#_(
 ;; =============================================================================
 ;; conda (soft-cut), condu (committed-choice)
 ;;
@@ -1959,4 +1959,4 @@
   failure."
   [u v]
   `(fn [a#]
-     (!=-verify a# (unify a# ~u ~v))))
+     (!=-verify a# (unify a# ~u ~v)))))
