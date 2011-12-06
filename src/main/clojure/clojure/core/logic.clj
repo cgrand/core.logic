@@ -753,7 +753,8 @@
 (defmacro mplus*
   ([e] e)
   ([e & e-rest]
-     `(mplus ~e (fn [] (mplus* ~@e-rest)))))
+    (reduce (fn [ex e] `(mplus ~e (fn [] ~ex))) 
+      nil (reverse (cons e e-rest)))))
 
 (defmacro -inc [& rest]
   `(fn -inc [] ~@rest))
@@ -761,8 +762,6 @@
 (extend-type Object
   ITake
   (take* [this] this))
-
-;; TODO: Choice always holds a as a list, can we just remove that?
 
 (deftype Choice [a f]
   IBind
@@ -773,7 +772,7 @@
     (Choice. a (fn [] (mplus (fp) f))))
   ITake
   (take* [this]
-    (lazy-seq (cons (first a) (lazy-seq (take* f))))))
+    (lazy-seq (cons a (take* f)))))
 
 (defn ^Choice choice [a f]
   (Choice. a f))
@@ -873,7 +872,7 @@
   `(let [xs# (take* (fn []
                       ((fresh [~x] ~@goals
                          (fn [a#]
-                           (cons (-reify a# ~x) '()))) ;; TODO: do we need this?
+                           (-reify a# ~x)))
                        empty-s)))]
      (if ~n
        (take ~n xs#)
